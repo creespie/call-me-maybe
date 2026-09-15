@@ -7,8 +7,13 @@ Usage:
 import argparse
 import json
 import sys
+import os
+import numpy
 from pathlib import Path
 from typing import Any
+from functions import func_parser, prompt_parser
+from create_prompt import ask_prompt_name, ask_prompt_value
+from ..llm_sdk.llm_sdk import Small_LLM_Model
 
 
 # Root of the project = parent of the "src" package this file lives in.
@@ -94,6 +99,23 @@ def write_json_file(path: Path, data: Any) -> None:
         print(f"Error: could not write output to {path}: {exc}", file=sys.stderr)
         raise SystemExit(1)
 
+def check_string(decoded: str) -> bool:
+
+    for char in decoded:
+        code = ord(char)
+
+        if code < 0x20:
+            return False
+
+    return True
+
+def check_nbr(decoded: str) -> bool:
+    int_set = set("0","1","2", "3", "4", "5" , "6" , "7", "8", "9", "e", ".", '"')
+    for char in decoded:
+        if char not in int_set:
+            return False
+    return True
+
 
 def main() -> None:
     """Run the function calling pipeline end to end."""
@@ -101,18 +123,61 @@ def main() -> None:
 
     functions_definition = load_json_file(args.functions_definition)
     prompts = load_json_file(args.input)
+    model = Small_LLM_Model()
+    vocab = load_json_file(model.get_path_to_vocab_file())
 
-    # TODO: validate functions_definition and prompts with pydantic models
-    # TODO: for each prompt, run the constrained generation loop against the
-    #       LLM to produce {"prompt": ..., "name": ..., "parameters": ...}
-    # TODO: collect results into a list
-
+    names, params, desc = func_parser(functions_definition)
+    prompt_parser(prompts)
     results: list[dict[str, Any]] = []
-    for entry in prompts:
-        prompt = entry["prompt"]
-        # placeholder until the generation logic is implemented
-        result = {"prompt": prompt, "name": None, "parameters": {}}
-        results.append(result)
+    for p in prompts:
+        call = os.path.commonprefix(names)
+        temp_name = names
+        #finds function name
+        for _ in range(50):
+            current_question = model.encode(ask_prompt_name(p["prompt"], functions_definition, temp_name, call))
+            logits = numpy.array(model.get_logits_from_input_ids(current_question))
+            for _ in range(50):
+                test_call = ""
+                max_id = numpy.argmax(logits)
+                test_call = call + model.decode([max_id])
+                if any(test_call in s for s in temp_name):
+                    call = test_call
+                    break
+                logits[max_id] = -numpy.inf
+            temp_name =[name for name in temp_name if name.startswith(call)]
+            if len(temp_name) == 1:
+                call = temp_name[0]
+                break
+        if len(temp_name) != 1:
+            results.append({"prompt": "Couldn't find it in reasonable time", "name": "Unknown", "parameters": "Unknown"})
+            continue
+        #finds function value
+        param_str = "{"
+        selected_function = functions_definition[names.index(temp_name[0])]
+        for p in selected_function["parameters"].keys():
+            p_value = ""
+            param_str += f'"{p}": "{p_value}'
+            for _ in range(50):
+                current_question = model.encode(ask_prompt_value(p["prompt"], selected_function, p, param_str))
+                logits = numpy.array(model.get_logits_from_input_ids(current_question))
+                for _ in range(50):
+                    max_id = numpy.argmax(logits)
+                    new = model.decode([max_id])
+                    if selected_function["parameters"][p]["type"] in ("number", "int", "float", "digit"):
+                        if check_nbr(new):
+                            p_value += new
+                            break
+                    else:
+                        if check_string(new):
+                            p_value += new
+                            break
+                if p_value[:-1] == '"':
+                    break
+            if selected_function["parameters"].keys().index(p) < len(selected_function["parameters"].keys()) - 1:
+                param_str += ', '    
+            else:
+                param_str += "}"
+        results.append({"prompt": p, "name": temp_name[0], "parameters": param_str})
 
     write_json_file(args.output, results)
 
