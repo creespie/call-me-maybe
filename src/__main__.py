@@ -146,14 +146,16 @@ def main() -> None:
             current_question = model.encode(ask_prompt_name(p["prompt"], functions_definition, temp_name, call))
             current_question = normalize_input_ids(current_question)
             logits = numpy.array(model.get_logits_from_input_ids(current_question))
-            for _ in range(50):
-                test_call = ""
-                max_id = numpy.argmax(logits)
-                test_call = call + model.decode([max_id])
+            sorted_ids = numpy.argsort(logits)[::-1]
+            found = False
+            for max_id in sorted_ids:
+                token_str = model.decode([max_id])
+                test_call = call + token_str
                 if any(test_call in s for s in temp_name if s.startswith(test_call)):
                     call = test_call
+                    found = True
                     break
-                logits[max_id] = -numpy.inf
+            print(f"DEBUG name loop: token={token_str!r} call={call!r} found={found} candidates={temp_name}")
             temp_name =[name for name in temp_name if name.startswith(call)]
             if len(temp_name) == 1:
                 call = temp_name[0]
@@ -164,43 +166,50 @@ def main() -> None:
         #finds function value
         param_str = "{"
         selected_function = functions_by_name[temp_name[0]]
-        for pa in selected_function["parameters"].keys():
+        param_keys = list(selected_function["parameters"].keys())
+        for pa in param_keys:
+            is_number = selected_function["parameters"][pa]["type"] in ("number", "int", "float", "digit")
             p_value = ""
-            param_str += f'"{pa}": ' if selected_function["parameters"][pa]["type"] in ("number", "int", "float", "digit") else f'"{pa}": "'
+            param_str += f'"{pa}": ' if is_number else f'"{pa}": "'
+            finished = False
             for _ in range(50):
-                flag_numbers = False
-                current_question = model.encode(ask_prompt_value(p["prompt"], selected_function, pa, param_str))
+                current_question = model.encode(ask_prompt_value(p["prompt"], selected_function, pa, param_str + p_value))
                 current_question = normalize_input_ids(current_question)
                 logits = numpy.array(model.get_logits_from_input_ids(current_question))
-                for _ in range(50):
-                    max_id = numpy.argmax(logits)
+                sorted_ids = numpy.argsort(logits)[::-1]
+                advanced = False
+                for max_id in sorted_ids:
                     new = model.decode([max_id])
-                    if selected_function["parameters"][pa]["type"] in ("number", "int", "float", "digit"):
-                        if new == "," or new == " ":
-                            flag_numbers = True
+                    if is_number:
+                        if new in (",", " ", "}", ""):
+                            finished = True
+                            advanced = True
                             break
                         if check_nbr(new):
                             p_value += new
+                            advanced = True
                             break
                     else:
-                         
-                        if check_string(new):
-                            p_value += new
+                        if new == '"':
+                            finished = True
+                            advanced = True
                             break
-                    logits[max_id] = -numpy.inf
-                if p_value[:-1] == '"' or flag_numbers:
+                        if new != "" and check_string(new):
+                            p_value += new
+                            advanced = True
+                            break
+                if not advanced or finished:
                     break
-            if selected_function["parameters"][pa]["type"] not in ("number", "int", "float", "digit"):
-                if param_str.strip()[:-1] != '"':
-                    param_str += '"'
-            if list(selected_function["parameters"].keys()).index(pa) < len(selected_function["parameters"].keys()) - 1:
+            param_str += p_value
+            if not is_number:
+                param_str += '"'
+            if param_keys.index(pa) < len(param_keys) - 1:
                 param_str += ', '
             else:
                 param_str += "}"
+        print(f"DEBUG param_str: {param_str!r}")
         results.append({"prompt": p["prompt"], "name": temp_name[0], "parameters": json.loads(param_str)})
-
     write_json_file(args.output, results)
-
 
 if __name__ == "__main__":
     main()

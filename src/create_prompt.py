@@ -17,8 +17,7 @@ Return a json object with the  function name within <tool_call></tool_call> XML 
 {prompt}<|im_end|>
 <|im_start|>assistant
 <tool_call>
-{{"name": "{call}
-            '''
+{{"name": "{call}'''
     return ret
 
 
@@ -37,8 +36,7 @@ Return a json object with the one or more values within <tool_call></tool_call> 
 {prompt}<|im_end|>
 <|im_start|>assistant
 <tool_call>
-{call}
-        '''
+{call}'''
     return val
 
 
