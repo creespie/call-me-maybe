@@ -171,35 +171,32 @@ def main() -> None:
             is_number = selected_function["parameters"][pa]["type"] in ("number", "int", "float", "digit")
             p_value = ""
             param_str += f'"{pa}": ' if is_number else f'"{pa}": "'
-            finished = False
             for _ in range(50):
                 current_question = model.encode(ask_prompt_value(p["prompt"], selected_function, pa, param_str + p_value))
                 current_question = normalize_input_ids(current_question)
                 logits = numpy.array(model.get_logits_from_input_ids(current_question))
-                sorted_ids = numpy.argsort(logits)[::-1]
-                advanced = False
-                for max_id in sorted_ids:
-                    new = model.decode([max_id])
-                    if is_number:
-                        if new in (",", " ", "}", ""):
-                            finished = True
-                            advanced = True
-                            break
-                        if check_nbr(new):
-                            p_value += new
-                            advanced = True
-                            break
-                    else:
-                        if new == '"':
-                            finished = True
-                            advanced = True
-                            break
-                        if new != "" and check_string(new):
-                            p_value += new
-                            advanced = True
-                            break
-                if not advanced or finished:
+                max_id = numpy.argmax(logits)
+                new = model.decode([max_id])
+                if new == "":
                     break
+                if is_number:
+                    prefix = ""
+                    for ch in new:
+                        if ch in "0123456789.eE-":
+                            prefix += ch
+                        else:
+                            break
+                    p_value += prefix
+                    if len(prefix) < len(new):
+                        break
+                else:
+                    if '"' in new:
+                        p_value += new.split('"')[0]
+                        break
+                    if check_string(new):
+                        p_value += new
+                    else:
+                        break
             param_str += p_value
             if not is_number:
                 param_str += '"'
@@ -209,7 +206,9 @@ def main() -> None:
                 param_str += "}"
         print(f"DEBUG param_str: {param_str!r}")
         results.append({"prompt": p["prompt"], "name": temp_name[0], "parameters": json.loads(param_str)})
+
     write_json_file(args.output, results)
+
 
 if __name__ == "__main__":
     main()
