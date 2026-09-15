@@ -157,24 +157,29 @@ def main() -> None:
         selected_function = functions_by_name[temp_name[0]]
         for pa in selected_function["parameters"].keys():
             p_value = ""
-            param_str += f'"{pa}": {p_value}' if selected_function["parameters"][p]["type"] in ("number", "int", "float", "digit") else f'"{pa}": "{p_value}'
+            param_str += f'"{pa}": ' if selected_function["parameters"][pa]["type"] in ("number", "int", "float", "digit") else f'"{pa}": "'
             for _ in range(50):
+                flag_numbers = False
                 current_question = model.encode(ask_prompt_value(p["prompt"], selected_function, pa, param_str))
                 logits = numpy.array(model.get_logits_from_input_ids(current_question))
                 for _ in range(50):
                     max_id = numpy.argmax(logits)
                     new = model.decode([max_id])
-                    if selected_function["parameters"][p]["type"] in ("number", "int", "float", "digit"):
+                    if selected_function["parameters"][pa]["type"] in ("number", "int", "float", "digit"):
+                        if new == "," or new == " ":
+                            flag_numbers = True
+                            break
                         if check_nbr(new):
                             p_value += new
                             break
                     else:
+                         
                         if check_string(new):
                             p_value += new
                             break
-                if p_value[:-1] == '"':
+                if p_value[:-1] == '"' or flag_numbers:
                     break
-            if selected_function["parameters"][p]["type"] not in ("number", "int", "float", "digit"):
+            if selected_function["parameters"][pa]["type"] not in ("number", "int", "float", "digit"):
                 if param_str.strip()[:-1] != '"':
                     param_str += '"'
             if list(selected_function["parameters"].keys()).index(pa) < len(selected_function["parameters"].keys()) - 1:
