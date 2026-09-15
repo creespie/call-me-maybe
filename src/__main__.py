@@ -70,6 +70,7 @@ def load_json_file(path: Path) -> Any:
     Raises:
         SystemExit: If the file is missing or contains invalid JSON.
     """
+    path = Path(path)
     try:
         with path.open("r", encoding="utf-8") as f:
             return json.load(f)
@@ -99,6 +100,14 @@ def write_json_file(path: Path, data: Any) -> None:
         print(f"Error: could not write output to {path}: {exc}", file=sys.stderr)
         raise SystemExit(1)
 
+def normalize_input_ids(input_ids: Any) -> list[int]:
+    """Normalize whatever model.encode() returns into a flat list[int]."""
+    if hasattr(input_ids, "tolist"):
+        input_ids = input_ids.tolist()
+    if input_ids and isinstance(input_ids[0], list):
+        input_ids = input_ids[0]
+    return [int(i) for i in input_ids]
+
 def check_string(decoded: str) -> bool:
 
     for char in decoded:
@@ -124,7 +133,6 @@ def main() -> None:
     functions_definition = load_json_file(args.functions_definition)
     prompts = load_json_file(args.input)
     model = Small_LLM_Model()
-    vocab = load_json_file(model.get_path_to_vocab_file())
 
     functions_by_name = {func["name"]: func for func in functions_definition}
     names, params, desc = func_parser(functions_definition)
@@ -136,6 +144,7 @@ def main() -> None:
         #finds function name
         for _ in range(50):
             current_question = model.encode(ask_prompt_name(p["prompt"], functions_definition, temp_name, call))
+            current_question = normalize_input_ids(current_question)
             logits = numpy.array(model.get_logits_from_input_ids(current_question))
             for _ in range(50):
                 test_call = ""
@@ -161,6 +170,7 @@ def main() -> None:
             for _ in range(50):
                 flag_numbers = False
                 current_question = model.encode(ask_prompt_value(p["prompt"], selected_function, pa, param_str))
+                current_question = normalize_input_ids(current_question)
                 logits = numpy.array(model.get_logits_from_input_ids(current_question))
                 for _ in range(50):
                     max_id = numpy.argmax(logits)
@@ -177,6 +187,7 @@ def main() -> None:
                         if check_string(new):
                             p_value += new
                             break
+                    logits[max_id] = -numpy.inf
                 if p_value[:-1] == '"' or flag_numbers:
                     break
             if selected_function["parameters"][pa]["type"] not in ("number", "int", "float", "digit"):

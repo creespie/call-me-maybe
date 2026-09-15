@@ -1,5 +1,15 @@
-PYTHON  := python3
-UV = uv
+PYTHON := python3
+UV     := uv
+
+# Override from the command line, e.g.:
+#   make run INPUT=data/input/my_prompts.json
+FUNCTIONS_DEFINITION ?=
+INPUT                ?=
+OUTPUT               ?=
+
+RUN_ARGS := $(if $(FUNCTIONS_DEFINITION),--functions_definition $(FUNCTIONS_DEFINITION)) \
+            $(if $(INPUT),--input $(INPUT)) \
+            $(if $(OUTPUT),--output $(OUTPUT))
 
 .PHONY: install run debug clean lint lint-strict
 
@@ -7,10 +17,10 @@ install:
 	$(UV) sync
 
 run:
-	uv run python -m src [--functions_definition ...] [--input ...] [--output ...]
+	$(UV) run $(PYTHON) -m src $(RUN_ARGS)
 
 debug:
-	$(PYTHON) -m pdb main.py $(MAP)
+	$(UV) run $(PYTHON) -m pdb -m src $(RUN_ARGS)
 
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
@@ -18,7 +28,7 @@ clean:
 
 lint:
 	flake8 .
-	mypy . 
+	mypy .
 
 lint-strict:
 	flake8 .

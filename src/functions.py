@@ -17,8 +17,8 @@ def func_parser(json_input: dict[str, str | dict[str, str]]) -> list[str]:
         for param in func["parameters"].keys():
             if "type" not in func["parameters"][param]:
                 sys.exit(f"Missing type in {param}")
-            elif not func["parameters"][param] or not isinstance(param["type"], str):
-                sys.exit(f"Missing value in {param['type']}")
+            elif not func["parameters"][param]["type"] or not isinstance(func["parameters"][param]["type"], str):
+                sys.exit(f"Missing value in {func['parameters'][param]['type']}")
         names.append(func["name"])
         params.append(func["parameters"])
         desc.append(func["description"])
