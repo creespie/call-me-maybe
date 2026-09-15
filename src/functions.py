@@ -5,19 +5,20 @@ def func_parser(json_input: dict[str, str | dict[str, str]]) -> list[str]:
     params = []
     desc = []
     for func in json_input:
-        if ("name", "description", "parameters") not in func.keys():
-            sys.exit(f"Missing key in {func}")
-        elif not func["name"] or not isinstance(func["name"], str):
-            sys.exit(f"Missing value in {func["name"]}")
+        for k in ("name", "description", "parameters"):
+            if k not in func.keys():
+                sys.exit(f"Missing key in {func}")
+        if not func["name"] or not isinstance(func["name"], str):
+            sys.exit(f"Missing value in {func['name']}")
         elif not func["description"] or not isinstance(func["description"], str):
-            sys.exit(f"Missing value in {func["description"]}")
+            sys.exit(f"Missing value in {func['description']}")
         elif not func["parameters"] or not isinstance(func["parameters"], dict):
-            sys.exit(f"Missing or wrong value in {func["parameters"]}")
-        for param in func["parameters"]:
-            if "type" not in param.keys():
+            sys.exit(f"Missing or wrong value in {func['parameters']}")
+        for param in func["parameters"].keys():
+            if "type" not in func["parameters"][param]:
                 sys.exit(f"Missing type in {param}")
-            elif not param["type"] or not isinstance(param["type"], str):
-                sys.exit(f"Missing value in {param["type"]}")
+            elif not func["parameters"][param] or not isinstance(param["type"], str):
+                sys.exit(f"Missing value in {param['type']}")
         names.append(func["name"])
         params.append(func["parameters"])
         desc.append(func["description"])

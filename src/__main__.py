@@ -11,9 +11,9 @@ import os
 import numpy
 from pathlib import Path
 from typing import Any
-from functions import func_parser, prompt_parser
-from create_prompt import ask_prompt_name, ask_prompt_value
-from ..llm_sdk.llm_sdk import Small_LLM_Model
+from .functions import func_parser, prompt_parser
+from .create_prompt import ask_prompt_name, ask_prompt_value
+from llm_sdk import Small_LLM_Model
 
 
 # Root of the project = parent of the "src" package this file lives in.
@@ -110,7 +110,7 @@ def check_string(decoded: str) -> bool:
     return True
 
 def check_nbr(decoded: str) -> bool:
-    int_set = set("0","1","2", "3", "4", "5" , "6" , "7", "8", "9", "e", ".", '"')
+    int_set = set("0123456789e.\"")
     for char in decoded:
         if char not in int_set:
             return False
@@ -126,6 +126,7 @@ def main() -> None:
     model = Small_LLM_Model()
     vocab = load_json_file(model.get_path_to_vocab_file())
 
+    functions_by_name = {func["name"]: func for func in functions_definition}
     names, params, desc = func_parser(functions_definition)
     prompt_parser(prompts)
     results: list[dict[str, Any]] = []
@@ -140,7 +141,7 @@ def main() -> None:
                 test_call = ""
                 max_id = numpy.argmax(logits)
                 test_call = call + model.decode([max_id])
-                if any(test_call in s for s in temp_name):
+                if any(test_call in s for s in temp_name if s.startswith(test_call)):
                     call = test_call
                     break
                 logits[max_id] = -numpy.inf
@@ -149,16 +150,16 @@ def main() -> None:
                 call = temp_name[0]
                 break
         if len(temp_name) != 1:
-            results.append({"prompt": "Couldn't find it in reasonable time", "name": "Unknown", "parameters": "Unknown"})
+            results.append({"prompt": p["prompt"], "name": "Unknown", "parameters": "Unknown"})
             continue
         #finds function value
         param_str = "{"
-        selected_function = functions_definition[names.index(temp_name[0])]
-        for p in selected_function["parameters"].keys():
+        selected_function = functions_by_name[temp_name[0]]
+        for pa in selected_function["parameters"].keys():
             p_value = ""
-            param_str += f'"{p}": "{p_value}'
+            param_str += f'"{pa}": {p_value}' if selected_function["parameters"][p]["type"] in ("number", "int", "float", "digit") else f'"{pa}": "{p_value}'
             for _ in range(50):
-                current_question = model.encode(ask_prompt_value(p["prompt"], selected_function, p, param_str))
+                current_question = model.encode(ask_prompt_value(p["prompt"], selected_function, pa, param_str))
                 logits = numpy.array(model.get_logits_from_input_ids(current_question))
                 for _ in range(50):
                     max_id = numpy.argmax(logits)
@@ -173,11 +174,14 @@ def main() -> None:
                             break
                 if p_value[:-1] == '"':
                     break
-            if selected_function["parameters"].keys().index(p) < len(selected_function["parameters"].keys()) - 1:
-                param_str += ', '    
+            if selected_function["parameters"][p]["type"] not in ("number", "int", "float", "digit"):
+                if param_str.strip()[:-1] != '"':
+                    param_str += '"'
+            if list(selected_function["parameters"].keys()).index(pa) < len(selected_function["parameters"].keys()) - 1:
+                param_str += ', '
             else:
                 param_str += "}"
-        results.append({"prompt": p, "name": temp_name[0], "parameters": param_str})
+        results.append({"prompt": p["prompt"], "name": temp_name[0], "parameters": json.loads(param_str)})
 
     write_json_file(args.output, results)
 
