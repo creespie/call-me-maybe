@@ -29,4 +29,4 @@ def prompt_parser(json_input: dict[str, str]):
         if "prompt" not in func.keys():
             sys.exit(f"Missing prompt")
         elif not func["prompt"] or not isinstance(func["prompt"], str):
-            sys.exit(f"Missing value in {func["prompt"]}")
+            sys.exit(f"Missing value in {func['prompt']}")

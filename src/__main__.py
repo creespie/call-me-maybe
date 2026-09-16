@@ -243,7 +243,7 @@ def main() -> None:
                         p_value += new
                     else:
                         break
-            arguments_str += p_value
+            arguments_str += p_value.strip()
             if not is_number:
                 arguments_str += '"'
             arguments_str += ', ' if idx < len(param_keys) - 1 else '}'
