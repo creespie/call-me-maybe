@@ -12,7 +12,7 @@ import numpy
 from pathlib import Path
 from typing import Any
 from .functions import func_parser, prompt_parser
-from .create_prompt import ask_prompt_name, ask_prompt_value
+from .create_prompt import ask_prompt
 from llm_sdk import Small_LLM_Model
 
 
@@ -108,6 +108,33 @@ def normalize_input_ids(input_ids: Any) -> list[int]:
         input_ids = input_ids[0]
     return [int(i) for i in input_ids]
 
+def common_prefix_len(a: list[int], b: list[int]) -> int:
+    """Length of the shared leading token-id sequence between a and b."""
+    n = min(len(a), len(b))
+    i = 0
+    while i < n and a[i] == b[i]:
+        i += 1
+    return i
+
+
+def log_softmax(logits: numpy.ndarray) -> numpy.ndarray:
+    m = logits.max()
+    return logits - m - numpy.log(numpy.sum(numpy.exp(logits - m)))
+
+
+def score_candidate(model, prompt: str, base_ids: list[int]) -> float:
+    """Teacher-forced sum of log P(token | context) for the tokens in `prompt`
+    that extend beyond the shared `base_ids` prefix."""
+    cand_ids = normalize_input_ids(model.encode(prompt))
+    start = common_prefix_len(base_ids, cand_ids)
+    score = 0.0
+    for i in range(start, len(cand_ids)):
+        context = cand_ids[:i]
+        logits = numpy.array(model.get_logits_from_input_ids(context))
+        score += float(log_softmax(logits)[cand_ids[i]])
+    return score
+
+
 def check_string(decoded: str) -> bool:
 
     for char in decoded:
@@ -139,40 +166,59 @@ def main() -> None:
     prompt_parser(prompts)
     results: list[dict[str, Any]] = []
     for p in prompts:
-        call = os.path.commonprefix(names)
+        base_prefix = os.path.commonprefix(names)
+        call = base_prefix
         temp_name = names
-        #finds function name
-        for _ in range(50):
-            current_question = model.encode(ask_prompt_name(p["prompt"], functions_definition, temp_name, call))
-            current_question = normalize_input_ids(current_question)
-            logits = numpy.array(model.get_logits_from_input_ids(current_question))
-            sorted_ids = numpy.argsort(logits)[::-1]
-            found = False
-            for max_id in sorted_ids:
-                token_str = model.decode([max_id])
-                test_call = call + token_str
-                if any(test_call in s for s in temp_name if s.startswith(test_call)):
-                    call = test_call
-                    found = True
-                    break
-            print(f"DEBUG name loop: token={token_str!r} call={call!r} found={found} candidates={temp_name}")
-            temp_name =[name for name in temp_name if name.startswith(call)]
-            if len(temp_name) == 1:
-                call = temp_name[0]
+
+        #finds function name: cheap single-token race first (1 forward pass)
+        generated = f'{{"name": "{call}'
+        current_question = model.encode(ask_prompt(p["prompt"], functions_definition, temp_name, generated))
+        current_question = normalize_input_ids(current_question)
+        logits = numpy.array(model.get_logits_from_input_ids(current_question))
+        sorted_ids = numpy.argsort(logits)[::-1]
+        for max_id in sorted_ids:
+            token_str = model.decode([max_id])
+            test_call = call + token_str
+            if any(s.startswith(test_call) for s in temp_name):
+                call = test_call
                 break
-        if len(temp_name) != 1:
-            results.append({"prompt": p["prompt"], "name": "Unknown", "parameters": "Unknown"})
-            continue
-        #finds function value
-        param_str = "{"
+        picked = [n for n in temp_name if n.startswith(call)][0]
+
+        # A single BPE token can merge past the point where two names diverge
+        # (e.g. 'g' -> greet vs get_square_root), landing confidently on the
+        # wrong one. Cheap check (no model calls): does `picked` belong to a
+        # group of names sharing the same next character after the common
+        # prefix? Only if so, verify with full teacher-forced scoring,
+        # restricted to that small group.
+        next_char = picked[len(base_prefix):len(base_prefix) + 1]
+        collision_group = [n for n in names if n[len(base_prefix):len(base_prefix) + 1] == next_char]
+
+        if len(collision_group) > 1:
+            base_generated = f'{{"name": "{base_prefix}'
+            base_prompt = ask_prompt(p["prompt"], functions_definition, collision_group, base_generated)
+            base_ids = normalize_input_ids(model.encode(base_prompt))
+            scores = {}
+            for candidate in collision_group:
+                cand_generated = f'{{"name": "{candidate}'
+                cand_prompt = ask_prompt(p["prompt"], functions_definition, collision_group, cand_generated)
+                scores[candidate] = score_candidate(model, cand_prompt, base_ids)
+            print(f"DEBUG collision group {collision_group}, scores: {scores}")
+            picked = max(scores, key=scores.get)
+
+        call = picked
+        temp_name = [call]
+
+        #finds function arguments, continuing the SAME generated <tool_call> sequence
         selected_function = functions_by_name[temp_name[0]]
         param_keys = list(selected_function["parameters"].keys())
-        for pa in param_keys:
+        arguments_str = "{"
+        for idx, pa in enumerate(param_keys):
             is_number = selected_function["parameters"][pa]["type"] in ("number", "int", "float", "digit")
             p_value = ""
-            param_str += f'"{pa}": ' if is_number else f'"{pa}": "'
+            arguments_str += f'"{pa}": ' if is_number else f'"{pa}": "'
             for _ in range(50):
-                current_question = model.encode(ask_prompt_value(p["prompt"], selected_function, pa, param_str + p_value))
+                generated = f'{{"name": "{temp_name[0]}", "arguments": {arguments_str}{p_value}'
+                current_question = model.encode(ask_prompt(p["prompt"], functions_definition, [temp_name[0]], generated))
                 current_question = normalize_input_ids(current_question)
                 logits = numpy.array(model.get_logits_from_input_ids(current_question))
                 max_id = numpy.argmax(logits)
@@ -197,15 +243,12 @@ def main() -> None:
                         p_value += new
                     else:
                         break
-            param_str += p_value
+            arguments_str += p_value
             if not is_number:
-                param_str += '"'
-            if param_keys.index(pa) < len(param_keys) - 1:
-                param_str += ', '
-            else:
-                param_str += "}"
-        print(f"DEBUG param_str: {param_str!r}")
-        results.append({"prompt": p["prompt"], "name": temp_name[0], "parameters": json.loads(param_str)})
+                arguments_str += '"'
+            arguments_str += ', ' if idx < len(param_keys) - 1 else '}'
+        print(f"DEBUG arguments: {arguments_str!r}")
+        results.append({"prompt": p["prompt"], "name": temp_name[0], "parameters": json.loads(arguments_str)})
 
     write_json_file(args.output, results)
 
