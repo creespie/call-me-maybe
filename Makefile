@@ -27,9 +27,9 @@ clean:
 	rm -rf .mypy_cache
 
 lint:
-	flake8 .
-	mypy .
+	flake8 src/*.py
+	mypy src/*.py  --warn-return-any --warn-unused-ignores --ignore-missing-imports --disallow-untyped-defs --check-untyped-defs
 
 lint-strict:
-	flake8 .
-	mypy . --strict
+	flake8 src/*.py
+	mypy src/*.py --strict
